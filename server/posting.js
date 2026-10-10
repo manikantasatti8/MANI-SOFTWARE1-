@@ -20,7 +20,7 @@ async function partyAccount(t, kind, id, name, create) {
   const a = await t.one('SELECT * FROM accounts WHERE party_kind=$1 AND party_id=$2', [kind, id]);
   if (a) return a;
   const label = name + (SUFFIX[kind] || '');
-  if (!create) return { id: null, code: CONTROL[kind] + '-NEW', name: label };
+  if (!create) return { id: null, code: CONTROL[kind] + ' · new', name: label };
   const ctl = await t.one('SELECT * FROM accounts WHERE code=$1 FOR UPDATE', [CONTROL[kind]]);
   const n = (await t.one('SELECT count(*)::int n FROM accounts WHERE parent_code=$1', [ctl.code])).n + 1;
   return t.one(`INSERT INTO accounts(code,name,type,parent_code,party_kind,party_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,

@@ -23,9 +23,21 @@ const CAN = {
 const can = what => (req, res, next) => CAN[what].includes(req.user.role) ? next() : res.status(403).json({ error: 'Your role cannot do this' });
 
 // ---------- login ----------
+// Five wrong passwords lock the account for 15 minutes.
 api.post('/login', wrap(async (req, res) => {
-  const u = await one('SELECT * FROM users WHERE lower(username)=lower($1) AND active', [req.body.username || '']);
-  if (!u || !bcrypt.compareSync(req.body.password || '', u.pass_hash)) throw fail('Wrong username or password', 401);
+  const bad = fail('Wrong username or password', 401);
+  const u = await one('SELECT * FROM users WHERE lower(username)=lower($1) AND active', [String(req.body.username || '').trim()]);
+  if (!u) { bcrypt.compareSync('x', '$2a$12$abcdefghijklmnopqrstuuJ8m1Yb4oQ7e0n0b0b0b0b0b0b0b0b0b0'); throw bad; }
+  if (u.locked_until && new Date(u.locked_until) > new Date())
+    throw fail(`Too many wrong passwords. Try again after ${new Date(u.locked_until).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.`, 423);
+  if (!bcrypt.compareSync(String(req.body.password || ''), u.pass_hash)) {
+    const n = u.failed_attempts + 1, lock = n >= 5;
+    await q(`UPDATE users SET failed_attempts=$2, locked_until=CASE WHEN $3 THEN now()+interval '15 minutes' ELSE NULL END WHERE id=$1`, [u.id, lock ? 0 : n, lock]);
+    if (lock) await audit({ q }, u.id, 'Account locked', 'user', u.username, '5 wrong passwords');
+    throw bad;
+  }
+  await q('UPDATE users SET failed_attempts=0, locked_until=NULL WHERE id=$1', [u.id]);
+  await new Promise((ok, no) => req.session.regenerate(e => e ? no(e) : ok()));
   req.session.uid = u.id;
   await audit({ q }, u.id, 'Signed in', 'user', u.username);
   res.json({ id: u.id, name: u.name, role: u.role, username: u.username });
@@ -39,7 +51,7 @@ api.use(wrap(async (req, res, next) => {
 }));
 api.get('/me', (req, res) => res.json(req.user));
 api.post('/password', wrap(async (req, res) => {
-  if ((req.body.password || '').length < 6) throw fail('Password must be at least 6 characters');
+  if ((req.body.password || '').length < 8) throw fail('Password must be at least 8 characters');
   await q('UPDATE users SET pass_hash=$1 WHERE id=$2', [bcrypt.hashSync(req.body.password, 10), req.user.id]);
   res.json({ ok: true });
 }));
@@ -286,7 +298,7 @@ api.get('/audit', can('finance'), wrap(async (req, res) => res.json(await q('SEL
 api.get('/users', can('admin'), wrap(async (req, res) => res.json(await q('SELECT id,username,name,role,active,created_at FROM users ORDER BY id'))));
 api.post('/users', can('admin'), wrap(async (req, res) => {
   const b = req.body; need(b, 'username', 'name', 'role', 'password');
-  if (b.password.length < 6) throw fail('Password must be at least 6 characters');
+  if (b.password.length < 8) throw fail('Password must be at least 8 characters');
   const u = await one('INSERT INTO users(username,name,role,pass_hash) VALUES($1,$2,$3,$4) RETURNING id,username,name,role', [b.username.trim(), b.name.trim(), b.role, bcrypt.hashSync(b.password, 10)]);
   await audit({ q }, req.user.id, 'User added', 'user', u.username, u.role); res.json(u);
 }));
@@ -294,7 +306,7 @@ api.put('/users/:id', can('admin'), wrap(async (req, res) => {
   const b = req.body; need(b, 'name', 'role');
   if (+req.params.id === req.user.id && (b.role !== 'Admin' || b.active === false)) throw fail('You cannot remove your own admin access');
   await q('UPDATE users SET name=$1, role=$2, active=$3 WHERE id=$4', [b.name, b.role, b.active !== false, req.params.id]);
-  if (b.password) { if (b.password.length < 6) throw fail('Password must be at least 6 characters'); await q('UPDATE users SET pass_hash=$1 WHERE id=$2', [bcrypt.hashSync(b.password, 10), req.params.id]); }
+  if (b.password) { if (b.password.length < 8) throw fail('Password must be at least 8 characters'); await q('UPDATE users SET pass_hash=$1 WHERE id=$2', [bcrypt.hashSync(b.password, 10), req.params.id]); }
   await audit({ q }, req.user.id, 'User updated', 'user', b.name, b.role); res.json({ ok: true });
 }));
 api.post('/insurers', can('admin'), wrap(async (req, res) => { need(req.body, 'name'); res.json(await one('INSERT INTO insurers(name) VALUES($1) RETURNING *', [req.body.name.trim()])); }));
