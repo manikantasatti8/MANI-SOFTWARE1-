@@ -1,0 +1,20 @@
+{
+  "name": "mani-software1",
+  "version": "0.1.0",
+  "description": "Broker Portal - production, closing and finance in one system",
+  "private": true,
+  "main": "server/index.js",
+  "scripts": {
+    "setup": "node db/setup.js",
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "connect-pg-simple": "^9.0.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "pg": "^8.11.5"
+  }
+}
