@@ -150,3 +150,30 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 -- Login protection: count wrong passwords and lock the account for a while.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+
+-- ---------- Finance: vouchers with allocation, PDC cheques ----------
+ALTER TABLE accounts      ADD COLUMN IF NOT EXISTS cash_kind TEXT;            -- bank | cash, on accounts money moves through
+ALTER TABLE journal_lines ADD COLUMN IF NOT EXISTS invoice_id INTEGER REFERENCES invoices(id);   -- allocation to an invoice
+ALTER TABLE journals      ADD COLUMN IF NOT EXISTS cash_account_id INTEGER REFERENCES accounts(id);
+ALTER TABLE invoices      ADD COLUMN IF NOT EXISTS endorsement_no TEXT;
+CREATE INDEX IF NOT EXISTS journal_lines_invoice_ix ON journal_lines (invoice_id);
+UPDATE accounts SET cash_kind='cash' WHERE code IN ('110101','110102') AND cash_kind IS NULL;
+UPDATE accounts SET cash_kind='bank' WHERE code='110111' AND cash_kind IS NULL;
+-- Invoice postings made before allocation existed: tag their party lines with the invoice.
+UPDATE journal_lines l SET invoice_id=j.invoice_id FROM journals j, accounts a
+  WHERE j.id=l.journal_id AND a.id=l.account_id AND a.party_kind IS NOT NULL AND j.invoice_id IS NOT NULL AND l.invoice_id IS NULL;
+
+CREATE TABLE IF NOT EXISTS pdcs (
+  id SERIAL PRIMARY KEY,
+  ref TEXT NOT NULL UNIQUE,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  payee TEXT NOT NULL DEFAULT 'Us',            -- Us | Insurer (cheque written straight to the insurer)
+  cheque_no TEXT NOT NULL, bank TEXT,
+  cheque_date DATE NOT NULL,
+  amount NUMERIC(16,2) NOT NULL CHECK (amount > 0),
+  status TEXT NOT NULL DEFAULT 'Pending',      -- Pending | Cleared | Bounced | Cancelled
+  journal_id INTEGER REFERENCES journals(id),
+  note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

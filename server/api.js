@@ -18,6 +18,7 @@ const CAN = {
   close:   ['Admin', 'Closing'],               // approve or return invoices
   finance: ['Admin', 'Finance', 'Manager', 'Closing'],   // see the books
   reverse: ['Admin', 'Finance'],
+  book:    ['Admin', 'Finance'],               // vouchers, PDC cheques, chart of accounts
   admin:   ['Admin']
 };
 const can = what => (req, res, next) => CAN[what].includes(req.user.role) ? next() : res.status(403).json({ error: 'Your role cannot do this' });
@@ -175,11 +176,11 @@ const invFields = b => {
   if (b.issue_type !== 'Endorsement' && +b.net <= 0) throw fail('Net premium must be more than zero');
   if (b.start_date && b.expiry_date && b.expiry_date < b.start_date) throw fail('Expiry date is before the start date');
   const m = calcInvoice(b);
-  return [b.enquiry_id || null, b.client_id, b.insurer_id, b.producer_id || null, b.issue_type || 'New', String(b.policy_no).trim(), b.dept, b.grp, b.cls, b.sub,
+  return [b.enquiry_id || null, b.client_id, b.insurer_id, b.producer_id || null, b.issue_type || 'New', String(b.policy_no).trim(), b.endorsement_no || null, b.dept, b.grp, b.cls, b.sub,
     b.invoice_date || new Date().toISOString().slice(0, 10), b.start_date || null, b.expiry_date || null, r2(b.sum_insured),
     m.net, m.fees, m.vat_pct, m.vat, m.total, m.comm_pct, m.comm_amt, m.comm_vat, m.prod_pct, m.prod_amt, m.prod_vat, b.pay_terms];
 };
-const invCols = 'enquiry_id,client_id,insurer_id,producer_id,issue_type,policy_no,dept,grp,cls,sub,invoice_date,start_date,expiry_date,sum_insured,net,fees,vat_pct,vat,total,comm_pct,comm_amt,comm_vat,prod_pct,prod_amt,prod_vat,pay_terms';
+const invCols = 'enquiry_id,client_id,insurer_id,producer_id,issue_type,policy_no,endorsement_no,dept,grp,cls,sub,invoice_date,start_date,expiry_date,sum_insured,net,fees,vat_pct,vat,total,comm_pct,comm_amt,comm_vat,prod_pct,prod_amt,prod_vat,pay_terms';
 
 api.get('/invoices', wrap(async (req, res) => res.json(await q(INV + ' ORDER BY i.id DESC'))));
 api.post('/invoices/calc', (req, res) => res.json(calcInvoice(req.body)));
@@ -232,7 +233,7 @@ api.post('/invoices/:id/approve', can('close'), wrap(async (req, res) => {
     const kind = i.issue_type === 'New' ? '' : i.issue_type + ' ';
     const j = await t.one(`INSERT INTO journals(no,type,jdate,ref,narration,invoice_id,created_by) VALUES($1,'Invoice',$2,$3,$4,$5,$6) RETURNING *`,
       [no, i.invoice_date, i.ref, `${kind}Invoice ${i.ref} – ${i.client_name} – ${i.cls} – ${i.insurer_name}`, i.id, req.user.id]);
-    for (const l of lines) await t.q('INSERT INTO journal_lines(journal_id,account_id,dr,cr,memo) VALUES($1,$2,$3,$4,$5)', [j.id, l.account_id, l.dr, l.cr, l.memo]);
+    for (const l of lines) await t.q('INSERT INTO journal_lines(journal_id,account_id,dr,cr,memo,invoice_id) VALUES($1,$2,$3,$4,$5,$6)', [j.id, l.account_id, l.dr, l.cr, l.memo, l.invoice_id]);
     await t.q(`UPDATE invoices SET status='Approved', approved_by=$2, approved_at=now(), journal_id=$3 WHERE id=$1`, [i.id, req.user.id, j.id]);
     if (i.enquiry_id) await setStage(t, i.enquiry_id, 'Closed', req.user.id, `approved by Closing, posted as ${no}`);
     await audit(t, req.user.id, 'Approved and posted', 'invoice', i.ref, `${no} · ${i.total}`);
@@ -248,7 +249,7 @@ api.get('/journals', can('finance'), wrap(async (req, res) => res.json(await q(`
   FROM journals j LEFT JOIN users u ON u.id=j.created_by ORDER BY j.id DESC`))));
 api.get('/journals/:id', can('finance'), wrap(async (req, res) => {
   const j = await one('SELECT * FROM journals WHERE id=$1', [req.params.id]); if (!j) throw fail('Not found', 404);
-  j.lines = await q('SELECT l.*, a.code, a.name FROM journal_lines l JOIN accounts a ON a.id=l.account_id WHERE journal_id=$1 ORDER BY l.id', [j.id]);
+  j.lines = await q('SELECT l.*, a.code, a.name, i.ref invoice_ref FROM journal_lines l JOIN accounts a ON a.id=l.account_id LEFT JOIN invoices i ON i.id=l.invoice_id WHERE journal_id=$1 ORDER BY l.id', [j.id]);
   res.json(j);
 }));
 api.post('/journals/:id/reverse', can('reverse'), wrap(async (req, res) => {
@@ -256,12 +257,18 @@ api.post('/journals/:id/reverse', can('reverse'), wrap(async (req, res) => {
   res.json(await tx(async t => {
     const j = await t.one('SELECT * FROM journals WHERE id=$1 FOR UPDATE', [req.params.id]);
     if (!j || j.status !== 'Posted' || j.type === 'Reversal') throw fail('Only a posted voucher can be reversed');
+    if (j.type === 'Invoice') {
+      const used = await t.one(`SELECT count(*)::int n FROM journal_lines l JOIN journals x ON x.id=l.journal_id WHERE l.invoice_id=$1 AND x.id<>$2 AND x.status='Posted' AND x.type<>'Reversal'`, [j.invoice_id, j.id]);
+      if (used.n) throw fail('This invoice has receipts or payments allocated to it. Reverse those vouchers first.');
+      if ((await t.one(`SELECT count(*)::int n FROM pdcs WHERE invoice_id=$1 AND status='Pending'`, [j.invoice_id])).n) throw fail('This invoice has pending PDC cheques. Cancel them first.');
+    }
     const no = await nextNo(t, 'RJ', 5);
     const r = await t.one(`INSERT INTO journals(no,type,jdate,ref,narration,invoice_id,reverses_id,created_by) VALUES($1,'Reversal',CURRENT_DATE,$2,$3,$4,$5,$6) RETURNING id`,
       [no, j.no, `Reversal of ${j.no} — ${req.body.reason}`, j.invoice_id, j.id, req.user.id]);
-    await t.q('INSERT INTO journal_lines(journal_id,account_id,dr,cr,memo) SELECT $1,account_id,cr,dr,memo FROM journal_lines WHERE journal_id=$2 ORDER BY id', [r.id, j.id]);
+    await t.q('INSERT INTO journal_lines(journal_id,account_id,dr,cr,memo,invoice_id) SELECT $1,account_id,cr,dr,memo,invoice_id FROM journal_lines WHERE journal_id=$2 ORDER BY id', [r.id, j.id]);
     await t.q(`UPDATE journals SET status='Reversed' WHERE id=$1`, [j.id]);
-    if (j.invoice_id) await t.q(`UPDATE invoices SET status='Reversed' WHERE id=$1`, [j.invoice_id]);
+    if (j.type === 'Invoice') await t.q(`UPDATE invoices SET status='Reversed' WHERE id=$1`, [j.invoice_id]);
+    await t.q(`UPDATE pdcs SET status='Pending', journal_id=NULL WHERE journal_id=$1`, [j.id]);
     await audit(t, req.user.id, 'Voucher reversed', 'journal', j.no, `${no} · ${req.body.reason}`);
     return { ok: true, journal_no: no };
   }));
@@ -311,5 +318,7 @@ api.put('/users/:id', can('admin'), wrap(async (req, res) => {
 }));
 api.post('/insurers', can('admin'), wrap(async (req, res) => { need(req.body, 'name'); res.json(await one('INSERT INTO insurers(name) VALUES($1) RETURNING *', [req.body.name.trim()])); }));
 api.post('/producers', can('admin'), wrap(async (req, res) => { need(req.body, 'name'); res.json(await one('INSERT INTO producers(name,comm_pct) VALUES($1,$2) RETURNING *', [req.body.name.trim(), +req.body.comm_pct || 0])); }));
+
+require('./finance')(api, { wrap, fail, need, can });
 
 module.exports = api;

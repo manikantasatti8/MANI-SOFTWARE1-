@@ -65,7 +65,7 @@ function navItems() {
   const n = [['', [['dashboard', 'Dashboard', 'grid']]],
     ['Production', [['pipeline', 'Pipeline', 'kanban'], ['enquiries', 'Enquiries', 'inbox'], ['clients', 'Clients', 'users'], ['invoices', 'Book Invoice', 'doc'], ['policies', 'Policies', 'shield']]],
     ['Closing', [['closing', 'Closing Approvals', 'check']]]];
-  if (canFinance()) n.push(['Finance', [['vouchers', 'Vouchers', 'book'], ['tb', 'Trial Balance', 'scale']]]);
+  if (canFinance()) n.push(['Finance', [['coa', 'Chart of Accounts', 'grid'], ['vouchers', 'Vouchers', 'book'], ['pdc', 'PDC Cheques', 'doc'], ['statements', 'Statements', 'users'], ['tb', 'Trial Balance', 'scale']]]);
   const adm = []; if (is('Admin')) adm.push(['admin', 'Users & Lists', 'gear']); if (canFinance()) adm.push(['audit', 'Activity Log', 'clock']);
   if (adm.length) n.push(['Admin', adm]);
   return n;
@@ -320,7 +320,7 @@ function invoiceForm(i = {}) {
   const start = i.start_date || today(), exp = i.expiry_date || (() => { const d = new Date(start + 'T00:00:00'); d.setFullYear(d.getFullYear() + 1); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
   modal(i.id ? 'Edit invoice ' + i.ref : 'Book invoice', `<input type="hidden" name="enquiry_id" value="${i.enquiry_id || ''}">
     <div class="sec" style="margin-top:0">Client & policy</div><div class="form">${sel('Client', 'client_id', clientOpts(), i.client_id)}${sel('Insurer', 'insurer_id', insOpts(), i.insurer_id)}
-      ${fld('Policy number', 'policy_no', i.policy_no, 'required')}${sel('Issue type', 'issue_type', ['New', 'Renewal', 'Endorsement'], i.issue_type)}${taxFields(i)}
+      ${fld('Policy number', 'policy_no', i.policy_no, 'required')}${sel('Issue type', 'issue_type', ['New', 'Renewal', 'Endorsement'], i.issue_type)}${fld('Endorsement number (if any)', 'endorsement_no', i.endorsement_no)}<div></div>${taxFields(i)}
       ${fld('Invoice date', 'invoice_date', i.invoice_date || today(), 'type="date" required')}${fld('Sum insured (AED)', 'sum_insured', i.sum_insured || '', 'type="number" step="0.01"')}
       ${fld('Policy start', 'start_date', start, 'type="date"')}${fld('Policy expiry', 'expiry_date', exp, 'type="date"')}</div>
     <div class="sec">Premium & charges</div><div class="form c3">${fld('Net premium (AED)', 'net', i.net ?? '', 'type="number" step="0.01" required')}${fld('Policy / other fees', 'fees', i.fees || '', 'type="number" step="0.01"')}${fld('VAT %', 'vat_pct', i.vat_pct ?? 5, 'type="number" step="0.01" min="0"')}</div>
@@ -371,7 +371,7 @@ const DO = {
   returnInv: id => ask('Return to Production', 'What needs to be corrected?', async d => { await api('POST', `/invoices/${id}/return`, d); toast('Returned to Production'); }),
   voucher: async id => { const j = await api('GET', '/journals/' + id), canRev = is('Admin', 'Finance') && j.status === 'Posted' && j.type !== 'Reversal';
     modal(`${j.no} · ${j.type}`, `<p class="dim" style="margin:0 0 12px">${fdate(j.jdate)} · ${esc(j.narration)} ${badge(j.status, j.status === 'Posted' ? 'ok' : 'bad')}</p>
-      <table><tr><th>Account</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th></tr>${j.lines.map(l => `<tr><td><span class="dim">${esc(l.code)}</span> ${esc(l.name)}</td><td class="dim">${esc(l.memo || '')}</td><td class="num">${l.dr ? nf(l.dr) : ''}</td><td class="num">${l.cr ? nf(l.cr) : ''}</td></tr>`).join('')}</table>`,
+      <table><tr><th>Account</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th></tr>${j.lines.map(l => `<tr><td><span class="dim">${esc(l.code)}</span> ${esc(l.name)}</td><td class="dim">${esc(l.memo || '')}${l.invoice_ref ? ' ' + badge(l.invoice_ref, 'info') : ''}</td><td class="num">${l.dr ? nf(l.dr) : ''}</td><td class="num">${l.cr ? nf(l.cr) : ''}</td></tr>`).join('')}</table>`,
       null, { extra: canRev ? `<button type="button" class="btn danger" data-do="reverse" data-id="${j.id}">Reverse this voucher</button>` : '' }); },
   reverse: id => ask('Reverse voucher', 'Reason for the reversal', async d => { const r = await api('POST', `/journals/${id}/reverse`, d); toast('Reversed as ' + r.journal_no); }),
   newInsurer: () => modal('Add insurer', fld('Insurer name', 'name', '', 'required'), d => api('POST', '/insurers', d), { narrow: true }),

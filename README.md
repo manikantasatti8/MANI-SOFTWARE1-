@@ -65,7 +65,19 @@ When other people start using it over the office network, it must run behind HTT
 | `public/` | The screens shown in the browser |
 | `public/taxonomy.js` | Department > Group > Class > Sub class lists |
 
+## Finance
+
+- **Chart of Accounts**: assets, liabilities, equity, income, expenses. Add your own accounts and bank or cash accounts.
+- **Vouchers**: bank receipt, bank payment, cash receipt, cash payment, general voucher. Each line can be allocated to an invoice or left without allocation (on account).
+- **Direct payment voucher**: when the client pays the insurer directly. The client balance and the insurer premium payable both go down.
+- **PDC cheques**: each cheque is linked to its invoice. Marking it cleared posts the voucher.
+- **Statements** (client premium, insurer premium, insurer commission, producer commission), invoice by invoice.
+
+Commission sits in one account per insurer. The statement splits it:
+`original = PDC part + part on outstanding premium + due part`, and `due commission = due part − settled`.
+Commission becomes due in step with the premium the client has paid, to us or directly to the insurer.
+
 ## Not built yet
 
-Finance beyond vouchers and trial balance (receipts, payments, statements, reports), endorsements
+Profit and loss, balance sheet, VAT report, provisions, year-end transfer to Head Office, endorsements
 as their own screen, renewals workflow, document upload, and email.

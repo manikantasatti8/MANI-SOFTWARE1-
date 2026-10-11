@@ -31,24 +31,24 @@ async function partyAccount(t, kind, id, name, create) {
 async function invoiceLines(t, inv, create) {
   const byCode = async code => t.one('SELECT * FROM accounts WHERE code=$1', [code]);
   const ref = inv.policy_no, L = [];
-  const add = (a, amt, side, memo) => {
+  const add = (a, amt, side, memo, tag) => {
     amt = r2(amt); if (!amt) return;
     if (amt < 0) { amt = -amt; side = side === 'dr' ? 'cr' : 'dr'; }      // refunds / credit endorsements flip sides
-    L.push({ account_id: a.id, code: a.code, name: a.name, dr: side === 'dr' ? amt : 0, cr: side === 'cr' ? amt : 0, memo });
+    L.push({ account_id: a.id, code: a.code, name: a.name, dr: side === 'dr' ? amt : 0, cr: side === 'cr' ? amt : 0, memo, invoice_id: tag ? inv.id : null });
   };
   const client = await partyAccount(t, 'client', inv.client_id, inv.client_name, create);
   const insP = await partyAccount(t, 'insurer', inv.insurer_id, inv.insurer_name, create);
   const insC = await partyAccount(t, 'inscomm', inv.insurer_id, inv.insurer_name, create);
-  add(client, inv.total, 'dr', 'Premium due incl. VAT – ' + ref);
-  add(insP, inv.total, 'cr', 'Gross premium payable – ' + ref);
-  add(insC, inv.comm_amt + inv.comm_vat, 'dr', `Commission ${inv.comm_pct}% + VAT receivable – ${ref}`);
+  add(client, inv.total, 'dr', 'Premium due incl. VAT – ' + ref, true);
+  add(insP, inv.total, 'cr', 'Gross premium payable – ' + ref, true);
+  add(insC, inv.comm_amt + inv.comm_vat, 'dr', `Commission ${inv.comm_pct}% + VAT receivable – ${ref}`, true);
   add(await byCode(commIncome(inv.dept)), inv.comm_amt, 'cr', 'Brokerage commission – ' + ref);
   add(await byCode('2104'), inv.comm_vat, 'cr', 'Output VAT on commission – ' + ref);
   if (inv.producer_id && inv.prod_amt) {
     const prod = await partyAccount(t, 'producer', inv.producer_id, inv.producer_name, create);
     add(await byCode('5101'), inv.prod_amt, 'dr', 'Producer commission – ' + inv.producer_name);
     add(await byCode('1105'), inv.prod_vat, 'dr', 'Input VAT – ' + inv.producer_name);
-    add(prod, inv.prod_amt + inv.prod_vat, 'cr', 'Commission payable – ' + ref);
+    add(prod, inv.prod_amt + inv.prod_vat, 'cr', 'Commission payable – ' + ref, true);
   }
   const dr = r2(L.reduce((s, l) => s + l.dr, 0)), cr = r2(L.reduce((s, l) => s + l.cr, 0));
   if (Math.abs(dr - cr) > 0.004) throw new Error(`Entries do not balance (Dr ${dr} / Cr ${cr})`);
