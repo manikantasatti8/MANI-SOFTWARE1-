@@ -201,3 +201,48 @@ CREATE TABLE IF NOT EXISTS amort_runs (
   journal_id INTEGER NOT NULL REFERENCES journals(id),
   PRIMARY KEY (amort_id, month)
 );
+
+-- ---------- Bank reconciliation, renewals, staff & provisions, documents ----------
+CREATE TABLE IF NOT EXISTS bank_recs (
+  id SERIAL PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  statement_date DATE NOT NULL,
+  statement_balance NUMERIC(16,2) NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE journal_lines ADD COLUMN IF NOT EXISTS rec_id INTEGER REFERENCES bank_recs(id);
+ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS renews_invoice_id INTEGER REFERENCES invoices(id);
+
+CREATE TABLE IF NOT EXISTS staff (
+  id SERIAL PRIMARY KEY,
+  emp_no TEXT UNIQUE,
+  name TEXT NOT NULL,
+  designation TEXT,
+  join_date DATE NOT NULL,
+  basic NUMERIC(14,2) NOT NULL DEFAULT 0,
+  allowances NUMERIC(14,2) NOT NULL DEFAULT 0,
+  leave_taken NUMERIC(8,2) NOT NULL DEFAULT 0,     -- annual leave days already taken since joining
+  exit_date DATE,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS provision_runs (
+  id SERIAL PRIMARY KEY,
+  month CHAR(7) NOT NULL,
+  gratuity NUMERIC(16,2) NOT NULL, leave NUMERIC(16,2) NOT NULL,
+  journal_id INTEGER NOT NULL REFERENCES journals(id),
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS documents (
+  id SERIAL PRIMARY KEY,
+  entity TEXT NOT NULL CHECK (entity IN ('client','enquiry','invoice')),
+  entity_id INTEGER NOT NULL,
+  name TEXT NOT NULL, mime TEXT, size INTEGER NOT NULL,
+  data BYTEA NOT NULL,
+  uploaded_by INTEGER REFERENCES users(id),
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS documents_entity_ix ON documents (entity, entity_id);

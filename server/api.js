@@ -213,6 +213,8 @@ const invFields = (b, s) => {
   if (s && s.access.max_invoice && Math.abs(calcInvoice(b).total) > s.access.max_invoice) throw fail(`Invoices above AED ${s.access.max_invoice.toLocaleString()} must be booked by another user`);
   if (s && s.access.clients_hidden.includes(+b.client_id)) throw fail('Client not found', 404);
   if (b.issue_type !== 'Endorsement' && +b.net <= 0) throw fail('Net premium must be more than zero');
+  if (b.issue_type === 'Endorsement' && !String(b.endorsement_no || '').trim()) throw fail('Please fill in: endorsement number');
+  if (b.issue_type === 'Endorsement' && !+b.net) throw fail('Enter the endorsement premium (use a minus amount for a refund)');
   if (b.start_date && b.expiry_date && b.expiry_date < b.start_date) throw fail('Expiry date is before the start date');
   const m = calcInvoice(b);
   return [b.enquiry_id || null, b.client_id, b.insurer_id, b.producer_id || null, b.issue_type || 'New', String(b.policy_no).trim(), b.endorsement_no || null, b.dept, b.grp, b.cls, b.sub,
@@ -270,6 +272,9 @@ api.post('/invoices/:id/approve', can('close'), wrap(async (req, res) => {
     if (lock.created_by === req.user.id && req.user.role !== 'Admin') throw fail('You cannot approve an invoice you booked yourself');
     const i = await t.one(INV + ' WHERE i.id=$1', [req.params.id]);
     const { lines } = await invoiceLines(t, i, true);
+    // Books closed by year-end: an older invoice is posted on the first open day instead.
+    const lk = ((await t.one(`SELECT value FROM settings WHERE key='lock_date'`)) || {}).value;
+    if (lk && i.invoice_date <= lk) { const d = new Date(lk + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); i.invoice_date = d.toISOString().slice(0, 10); }
     const no = await nextNo(t, 'IJ', 5);
     const kind = i.issue_type === 'New' ? '' : i.issue_type + ' ';
     const j = await t.one(`INSERT INTO journals(no,type,jdate,ref,narration,invoice_id,created_by) VALUES($1,'Invoice',$2,$3,$4,$5,$6) RETURNING *`,
@@ -290,7 +295,7 @@ api.get('/journals', can('finance'), books, wrap(async (req, res) => res.json(aw
   FROM journals j LEFT JOIN users u ON u.id=j.created_by ORDER BY j.id DESC`))));
 api.get('/journals/:id', can('finance'), books, wrap(async (req, res) => {
   const j = await one('SELECT * FROM journals WHERE id=$1', [req.params.id]); if (!j) throw fail('Not found', 404);
-  j.lines = await q('SELECT l.*, a.code, a.name, i.ref invoice_ref FROM journal_lines l JOIN accounts a ON a.id=l.account_id LEFT JOIN invoices i ON i.id=l.invoice_id WHERE journal_id=$1 ORDER BY l.id', [j.id]);
+  j.lines = await q('SELECT l.*, a.code, a.name, i.ref invoice_ref FROM journal_lines l JOIN accounts a ON a.id=l.account_id LEFT JOIN invoices i ON i.id=l.invoice_id WHERE l.journal_id=$1 ORDER BY l.id', [j.id]);
   res.json(j);
 }));
 api.post('/journals/:id/reverse', can('reverse'), books, wrap(async (req, res) => {
@@ -298,6 +303,7 @@ api.post('/journals/:id/reverse', can('reverse'), books, wrap(async (req, res) =
   res.json(await tx(async t => {
     const j = await t.one('SELECT * FROM journals WHERE id=$1 FOR UPDATE', [req.params.id]);
     if (!j || j.status !== 'Posted' || j.type === 'Reversal') throw fail('Only a posted voucher can be reversed');
+    if (j.type === 'Year-end Close') throw fail('A year-end close cannot be reversed');
     if (j.type === 'Invoice') {
       const used = await t.one(`SELECT count(*)::int n FROM journal_lines l JOIN journals x ON x.id=l.journal_id WHERE l.invoice_id=$1 AND x.id<>$2 AND x.status='Posted' AND x.type<>'Reversal'`, [j.invoice_id, j.id]);
       if (used.n) throw fail('This invoice has receipts or payments allocated to it. Reverse those vouchers first.');
@@ -365,6 +371,7 @@ api.post('/insurers', can('admin'), wrap(async (req, res) => { need(req.body, 'n
 api.post('/producers', can('admin'), wrap(async (req, res) => { need(req.body, 'name'); res.json(await one('INSERT INTO producers(name,comm_pct) VALUES($1,$2) RETURNING *', [req.body.name.trim(), +req.body.comm_pct || 0])); }));
 
 require('./finance')(api, { wrap, fail, need, can });
+require('./modules')(api, { wrap, fail, need, can });
 
 module.exports = api;
 module.exports.q_ = q;

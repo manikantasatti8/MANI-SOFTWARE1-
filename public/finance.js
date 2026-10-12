@@ -116,7 +116,7 @@ views.statements = async () => {
       ${rows.map(r => `<tr><td>${fdate(r.invoice_date)}</td><td>${esc(r.ref)}</td><td>${esc(kind === 'client' ? r.insurer_name : r.client_name)}</td><td>${esc(r.policy_no)}</td><td class="dim">${esc(r.endorsement_no || '')}</td>
         ${cols.map((c, n) => `<td class="num">${n === cols.length - 1 ? `<b>${nf(r[c[1]])}</b>` : r[c[1]] ? nf(r[c[1]]) : '<span class="mute">—</span>'}</td>`).join('')}</tr>`).join('')}
       <tr class="tot"><td colspan="5">Total</td>${cols.map(c => `<td class="num">${nf(sum(c[1]))}</td>`).join('')}</tr>
-      ${Math.abs(d.on_account) > 0.004 ? `<tr><td colspan="${4 + cols.length}">Received or paid without allocation (on account)</td><td class="num">${nf(d.on_account)}</td></tr>
+      ${Math.abs(d.on_account) > 0.004 ? `<tr><td colspan="${4 + cols.length}">Received or paid without allocation (on account)${canBook() && d.on_account < 0 && d.account ? ` <button class="btn sm pri noprint" data-do="allocate" data-id="${d.account.id}" data-kind="${kind}" data-party="${pid}">Allocate to invoices</button>` : ''}</td><td class="num">${nf(d.on_account)}</td></tr>
         <tr class="tot"><td colspan="${4 + cols.length}">Net balance</td><td class="num">${nf(sum('balance') + d.on_account)}</td></tr>` : ''}</table></div>` : '<div class="empty">No approved invoices</div>'}`}</div>`;
 };
 document.addEventListener('change', e => { if (e.target.id === 'stParty') location.hash = `#statements/${e.target.dataset.kind}${e.target.value ? '/' + e.target.value : ''}`; });

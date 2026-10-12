@@ -82,6 +82,19 @@ Commission sits in one account per insurer. The statement splits it:
 `original = PDC part + part on outstanding premium + due part`, and `due commission = due part − settled`.
 Commission becomes due in step with the premium the client has paid, to us or directly to the insurer.
 
+## Production extras
+
+- **Renewals**: policies expiring in the next 30/60/90/180 days. "Start renewal" creates a renewal enquiry from the old policy.
+- **Endorsements**: additions or refunds on an existing policy (use a minus premium for a refund). They go through Closing like any invoice.
+- **Documents**: attach PDFs, images, Word, Excel, email files and so on (up to 10 MB each) to clients, enquiries and invoices.
+
+## More Finance
+
+- **Allocation**: money received or paid on account can later be matched to invoices from the statement page.
+- **Bank Reconciliation**: tick the entries on the bank statement; it saves only when the ticked total agrees with the statement balance. The latest one can be undone.
+- **Staff & Provisions**: staff register; monthly gratuity (UAE: 21 days' basic a year for the first 5 years, 30 days after, none before 1 year, capped at 2 years' basic) and leave salary (30 days a year on basic, less days taken). Only the difference is posted each month.
+- **Year-end & Lock** (Admin): moves the year's profit or loss to the Head Office account and locks the books up to that date.
+
 ## Who sees what
 
 Under **Users & Lists**, each user can be limited to:
@@ -113,5 +126,4 @@ Backup (asks for your PostgreSQL password; keep the file outside the project fol
 
 ## Not built yet
 
-Matching an on-account receipt to invoices afterwards, gratuity and leave provisions, year-end transfer
-to Head Office, bank reconciliation, endorsements as their own screen, renewals workflow, document upload, and email.
+Sending email from the software (needs the company's mail server details).

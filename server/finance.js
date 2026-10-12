@@ -3,11 +3,17 @@ const { q, one, tx, nextNo, audit } = require('./db');
 const { r2 } = require('./posting');
 
 // Voucher types and the prefix of their running number.
-const VTYPES = { 'Bank Receipt': 'BR', 'Bank Payment': 'BP', 'Cash Receipt': 'CR', 'Cash Payment': 'CP', 'General Voucher': 'JV', 'Direct Payment': 'DP', Amortization: 'AM' };
+const VTYPES = { 'Bank Receipt': 'BR', 'Bank Payment': 'BP', 'Cash Receipt': 'CR', 'Cash Payment': 'CP', 'General Voucher': 'JV', 'Direct Payment': 'DP', Amortization: 'AM',
+  Allocation: 'AL', Provision: 'PR', 'Year-end Close': 'YE' };
+// Books locked up to this date (set by the year-end close). Nothing can be posted on or before it.
+const lockDate = async t => ((await t.one(`SELECT value FROM settings WHERE key='lock_date'`)) || {}).value || null;
 const PARTY_COL = { client: 'client_id', insurer: 'insurer_id', inscomm: 'insurer_id', producer: 'producer_id' };
 
 // Saves one balanced voucher. lines: [{account_id, dr, cr, memo, invoice_id}]
 async function postVoucher(t, { type, date, ref, narration, lines, cash_account_id, user }) {
+  const lock = await lockDate(t);
+  if (!date) throw new Error('Choose the date');
+  if (lock && date <= lock) throw new Error(`The books are closed up to ${lock}. Use a later date.`);
   lines = lines.map(l => ({ ...l, dr: r2(l.dr), cr: r2(l.cr) })).filter(l => l.dr || l.cr);
   if (lines.length < 2) throw new Error('A voucher needs at least two lines with amounts');
   const dr = r2(lines.reduce((s, l) => s + l.dr, 0)), cr = r2(lines.reduce((s, l) => s + l.cr, 0));
@@ -22,7 +28,7 @@ async function postVoucher(t, { type, date, ref, narration, lines, cash_account_
       if (!a.party_kind) throw new Error(`${a.name} is not a client, insurer or producer account, so it cannot be allocated to an invoice`);
       const inv = await t.one(`SELECT * FROM invoices WHERE id=$1 AND status='Approved' FOR UPDATE`, [l.invoice_id]);
       if (!inv || inv[PARTY_COL[a.party_kind]] !== a.party_id) throw new Error(`That invoice does not belong to ${a.name}`);
-      if (!['General Voucher', 'Amortization'].includes(type)) {
+      if (!['General Voucher', 'Amortization', 'Year-end Close'].includes(type)) {
         const b = await t.one('SELECT coalesce(sum(dr)-sum(cr),0) bal FROM journal_lines WHERE invoice_id=$1 AND account_id=$2', [inv.id, a.id]);
         const after = r2(b.bal + l.dr - l.cr);
         if (Math.abs(after) > Math.abs(b.bal) + 0.004 || (b.bal && after && Math.sign(after) !== Math.sign(b.bal)))
@@ -139,7 +145,7 @@ module.exports = (api, { wrap, fail, need, can }) => {
   // Receipt / payment: one bank or cash account against any number of lines. General voucher: free debit and credit lines.
   api.post('/vouchers', can('book'), fullBooks, safe(async (req, res) => {
     const b = req.body; need(b, 'type', 'date');
-    if (!VTYPES[b.type] || ['Direct Payment', 'Amortization'].includes(b.type)) throw fail('Unknown voucher type');
+    if (!['Bank Receipt', 'Bank Payment', 'Cash Receipt', 'Cash Payment', 'General Voucher'].includes(b.type)) throw fail('Unknown voucher type');
     const rows = Array.isArray(b.lines) ? b.lines : [];
     res.json(await tx(async t => {
       let lines;
@@ -241,7 +247,8 @@ module.exports = (api, { wrap, fail, need, can }) => {
     if (!pid) return res.json({ parties, rows: [], on_account: 0 });
     if (!parties.some(p => p.id === pid)) throw fail('Not found', 404);
     // Money received or paid without allocation sits "on account" until it is matched to an invoice. Hidden from restricted users.
-    res.json({ parties, rows: await partyRows(req.scope, kind, pid), on_account: req.scope.restricted ? 0 : await onAccount(kind, pid) });
+    res.json({ parties, rows: await partyRows(req.scope, kind, pid), on_account: req.scope.restricted ? 0 : await onAccount(kind, pid),
+      account: await one('SELECT id, code, name FROM accounts WHERE party_kind=$1 AND party_id=$2', [kind, pid]) });
   }));
 
   // ---------- aging ----------
@@ -302,7 +309,7 @@ module.exports = (api, { wrap, fail, need, can }) => {
   api.get('/financials', can('finance'), fullBooks, safe(async (req, res) => {
     const from = req.query.from || '1900-01-01', to = req.query.to || '2999-12-31';
     res.json(await q(`SELECT a.id, a.code, a.name, a.type, a.parent_code, a.is_group, a.control,
-        coalesce(sum(l.dr-l.cr) FILTER (WHERE j.jdate BETWEEN $1 AND $2),0) period, coalesce(sum(l.dr-l.cr) FILTER (WHERE j.jdate<=$2),0) closing
+        coalesce(sum(l.dr-l.cr) FILTER (WHERE j.jdate BETWEEN $1 AND $2 AND j.type<>'Year-end Close'),0) period, coalesce(sum(l.dr-l.cr) FILTER (WHERE j.jdate<=$2),0) closing
       FROM accounts a LEFT JOIN journal_lines l ON l.account_id=a.id LEFT JOIN journals j ON j.id=l.journal_id
       GROUP BY a.id ORDER BY a.code`, [from, to]));
   }));
@@ -351,3 +358,6 @@ module.exports = (api, { wrap, fail, need, can }) => {
   }));
 
 };
+module.exports.postVoucher = postVoucher;
+module.exports.partyRows = partyRows;
+module.exports.lockDate = lockDate;

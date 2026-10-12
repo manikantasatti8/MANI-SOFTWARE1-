@@ -38,7 +38,7 @@ const IC = {
   scale: '<path d="M12 4v16M6 20h12M5 8h14M5 8l-2.500 6a3 3 0 005 0zM19 8l-2.500 6a3 3 0 005 0z"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.600 5.600l2.100 2.100M16.300 16.300l2.100 2.100M5.600 18.400l2.100-2.100M16.300 7.700l2.100-2.100"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>', send: '<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>', coin: '<ellipse cx="12" cy="7" rx="7" ry="3"/><path d="M5 7v5c0 1.700 3.100 3 7 3s7-1.300 7-3V7M5 12v5c0 1.700 3.100 3 7 3s7-1.300 7-3v-5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>', send: '<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>', coin: '<ellipse cx="12" cy="7" rx="7" ry="3"/><path d="M5 7v5c0 1.700 3.100 3 7 3s7-1.300 7-3V7M5 12v5c0 1.700 3.100 3 7 3s7-1.300 7-3v-5"/>',
   chat: '<path d="M4 5h16v11H9l-5 4z"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.500-3.500"/>'
 };
 const ic = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${IC[k]}</svg>`;
@@ -68,12 +68,13 @@ const stKinds = () => { const a = ACC().statements || []; return a.length ? ST_K
 const canProduce = () => is('Admin', 'Production'), canClose = () => is('Admin', 'Closing'), canFinance = () => is('Admin', 'Finance', 'Manager', 'Closing');
 function navItems() {
   const n = [['', [['dashboard', 'Dashboard', 'grid']]],
-    ['Production', [['pipeline', 'Pipeline', 'kanban'], ['enquiries', 'Enquiries', 'inbox'], ['clients', 'Clients', 'users'], ['invoices', 'Book Invoice', 'doc'], ['policies', 'Policies', 'shield']]],
+    ['Production', [['pipeline', 'Pipeline', 'kanban'], ['enquiries', 'Enquiries', 'inbox'], ['clients', 'Clients', 'users'], ['invoices', 'Book Invoice', 'doc'], ['policies', 'Policies', 'shield'], ['renewals', 'Renewals', 'clock'], ['endorsements', 'Endorsements', 'edit']]],
     ['Closing', [['closing', 'Closing Approvals', 'check']]]];
   if (canFinance()) { const full = !restricted(), anySt = stKinds().length;
     n.push(['Finance', [['fin', 'Finance Dashboard', 'grid'], full && ['coa', 'Chart of Accounts', 'book'], full && ['vouchers', 'Vouchers', 'book'], ['pdc', 'PDC Cheques', 'doc'], ['pdc-premium', 'PDC Premium', 'coin'],
-      anySt && ['statements', 'Statements', 'users'], anySt && ['aging', 'Aging Reports', 'clock'], full && ['financials', 'Profit & Loss / Balance Sheet', 'scale'], full && ['vat', 'VAT Report', 'scale'], full && ['amort', 'Amortization', 'clock'], full && ['tb', 'Trial Balance', 'scale']].filter(Boolean)]); }
-  const adm = []; if (is('Admin')) adm.push(['admin', 'Users & Lists', 'gear']); if (canFinance() && !restricted()) adm.push(['audit', 'Activity Log', 'clock']);
+      anySt && ['statements', 'Statements', 'users'], anySt && ['aging', 'Aging Reports', 'clock'], full && ['financials', 'Profit & Loss / Balance Sheet', 'scale'], full && ['vat', 'VAT Report', 'scale'], full && ['amort', 'Amortization', 'clock'], full && ['tb', 'Trial Balance', 'scale'], full && ['bankrec', 'Bank Reconciliation', 'check']].filter(Boolean)]);
+    if (full && is('Admin', 'Finance')) n.push(['HR', [['staff', 'Staff & Provisions', 'users']]]); }
+  const adm = []; if (is('Admin')) adm.push(['admin', 'Users & Lists', 'gear'], ['yearend', 'Year-end & Lock', 'shield']); if (canFinance() && !restricted()) adm.push(['audit', 'Activity Log', 'clock']);
   if (adm.length) n.push(['Admin', adm]);
   return n;
 }
@@ -93,7 +94,7 @@ async function render() {
       <div class="me" data-do="account"><div class="av">${initials(S.user.name)}</div><div><b>${esc(S.user.name)}</b><small>${esc(S.user.role)}</small></div></div>
       <button class="btn sm" data-do="logout">Sign out</button></div>
       <div class="page" id="page"><div class="empty">Loading…</div></div></div></div>`;
-  try { $('#page').innerHTML = await views[S.view](); } catch (e) { $('#page').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  try { $('#page').innerHTML = await views[S.view](); document.querySelectorAll('#page [data-docs]').forEach(el => loadDocs(el)); } catch (e) { $('#page').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 // Every screen has its own address (#view/part/part), so it can be bookmarked or opened in another tab.
 const go = (view, sel) => { const h = '#' + view + (sel ? '/' + sel : ''); S.search = '';
@@ -209,7 +210,8 @@ function workspace(e) {
         ${e.invoices.length ? `<div class="sec">Invoices</div>${e.invoices.map(i => `<div class="row" style="padding:5px 0"><a data-nav="invoices">${esc(i.ref)}</a><span class="dim">${esc(i.policy_no)}</span><span class="sp"></span>${nf(i.total)} ${badge(i.status, INV_TONE[i.status])}</div>`).join('')}` : ''}</div>
       <div class="card"><h3>Internal Notes</h3><form id="noteForm" data-id="${e.id}" class="row"><input name="body" placeholder="Add a note…" required><button class="btn sm">Add</button></form>
         <div style="margin-top:10px">${e.notes.filter(n => n.kind === 'note').map(n => `<div class="row" style="align-items:flex-start;padding:8px 0"><div class="av sm">${initials(n.user_name)}</div><div><b>${esc(n.user_name || '')}</b> <small class="mute">${ftime(n.at)}</small><br>${esc(n.body)}</div></div>`).join('') || '<div class="empty">No notes yet</div>'}</div></div></div>
-    <div class="card"><h3>Timeline</h3><ul class="tl">${e.notes.map(n => `<li class="${n.kind}"><span class="dim">${ftime(n.at)}</span><span>${esc(n.body)} <small class="mute">· ${esc(n.user_name || '')}</small></span></li>`).join('')}</ul></div>`;
+    <div class="card" style="margin-bottom:16px"><h3>Timeline</h3><ul class="tl">${e.notes.map(n => `<li class="${n.kind}"><span class="dim">${ftime(n.at)}</span><span>${esc(n.body)} <small class="mute">· ${esc(n.user_name || '')}</small></span></li>`).join('')}</ul></div>
+    <div class="card" data-docs="enquiry:${e.id}"></div>`;
 }
 
 views.clients = async () => {
@@ -248,9 +250,9 @@ views.policies = async () => {
   const list = (await api('GET', '/policies')).filter(i => hit(i.policy_no, i.client_name, i.insurer_name, i.cls));
   const days = d => d ? Math.round((new Date(d + 'T00:00:00') - new Date(today() + 'T00:00:00')) / 864e5) : null;
   return `<div class="head"><div><h1>Policies</h1><p>Approved policies, soonest expiry first</p></div></div>
-    <div class="card">${list.length ? `<div class="tw"><table><tr><th>Policy no.</th><th>Client</th><th>Insurer</th><th>Class</th><th>Start</th><th>Expiry</th><th class="num">Net premium</th><th>Renewal</th></tr>
+    <div class="card">${list.length ? `<div class="tw"><table><tr><th>Policy no.</th><th>Client</th><th>Insurer</th><th>Class</th><th>Start</th><th>Expiry</th><th class="num">Net premium</th><th>Renewal</th><th></th></tr>
       ${list.map(i => { const d = days(i.expiry_date); return `<tr class="click" data-do="preview" data-id="${i.id}"><td><b>${esc(i.policy_no)}</b></td><td>${esc(i.client_name)}</td><td class="dim">${esc(i.insurer_name)}</td><td class="dim">${esc(i.cls)}</td>
-        <td>${fdate(i.start_date)}</td><td>${fdate(i.expiry_date)}</td><td class="num">${nf(i.net)}</td><td>${d === null ? '' : d < 0 ? badge('Expired', 'bad') : d <= 30 ? badge(d + ' days', 'warn') : d <= 60 ? badge(d + ' days', 'info') : badge('Active', 'ok')}</td></tr>`; }).join('')}</table></div>` : '<div class="empty">Policies appear here once Closing approves them</div>'}</div>`;
+        <td>${fdate(i.start_date)}</td><td>${fdate(i.expiry_date)}</td><td class="num">${nf(i.net)}</td><td>${d === null ? '' : d < 0 ? badge('Expired', 'bad') : d <= 30 ? badge(d + ' days', 'warn') : d <= 60 ? badge(d + ' days', 'info') : badge('Active', 'ok')}</td><td class="num">${canProduce() ? `<button class="btn sm" data-do="endorse" data-id="${i.id}">${ic('edit')}Endorse</button>` : ''}</td></tr>`; }).join('')}</table></div>` : '<div class="empty">Policies appear here once Closing approves them</div>'}</div>`;
 };
 
 views.vouchers = async () => {
@@ -288,7 +290,7 @@ function modal(title, body, onSave, o = {}) {
   const m = $('#modal'); m.hidden = false;
   m.innerHTML = `<form class="card ${o.narrow ? 'narrow' : ''}"><h2>${esc(title)}</h2><div style="margin-top:14px">${body}</div>
     <footer>${o.extra || ''}<span class="sp"></span><button type="button" class="btn" data-do="closeModal">${onSave ? 'Cancel' : 'Close'}</button>${onSave ? `<button class="btn ${o.kind || 'pri'}">${esc(o.save || 'Save')}</button>` : ''}</footer></form>`;
-  const f = $('form', m); if (o.init) o.init(f);
+  const f = $('form', m); if (o.init) o.init(f); m.querySelectorAll('[data-docs]').forEach(el => loadDocs(el));
   f.onsubmit = act(async e => { e.preventDefault(); if (!onSave) return; const d = Object.fromEntries(new FormData(f)); await onSave(d, f); closeModal(); await refresh(); });
   const first = $('input:not([type=hidden]),select,textarea', f); if (first) first.focus();
 }
@@ -313,7 +315,7 @@ const clientOpts = () => S.meta.clients.map(c => [c.id, c.name]), insOpts = () =
 function clientForm(c = {}) {
   modal(c.id ? 'Edit client' : 'New client', `<div class="form">${fld('Client name', 'name', c.name, 'required')}${sel('Type', 'type', ['Corporate', 'Individual', 'SME', 'Government'], c.type)}
     ${fld('Contact person', 'contact', c.contact)}${fld('Phone', 'phone', c.phone)}${fld('Email', 'email', c.email, 'type="email"')}${fld('City', 'city', c.city)}
-    ${fld('TRN (VAT number)', 'trn', c.trn)}${sel('Producer', 'producer_id', prodOpts(), c.producer_id, '— none —')}</div>`,
+    ${fld('TRN (VAT number)', 'trn', c.trn)}${sel('Producer', 'producer_id', prodOpts(), c.producer_id, '— none —')}</div>${c.id ? `<div data-docs="client:${c.id}" style="margin-top:16px"></div>` : ''}`,
     d => c.id ? api('PUT', '/clients/' + c.id, d) : api('POST', '/clients', d));
 }
 function enquiryForm(e = {}) {
@@ -352,7 +354,7 @@ async function previewInvoice(id) {
     <p class="dim" style="margin:12px 0 0">Period ${fdate(i.start_date)} – ${fdate(i.expiry_date)} · Booked by ${esc(i.created_by_name || '')}${i.approved_by_name ? ' · Approved by ' + esc(i.approved_by_name) + ' as ' + esc(i.journal_no) : ''}</p>
     <div class="sec">${i.status === 'Approved' ? 'Entries posted to Finance' : 'Entries that will be posted to Finance on approval'}</div>
     <table><tr><th>Account</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th></tr>${p.lines.map(l => `<tr><td><span class="dim">${esc(l.code)}</span> ${esc(l.name)}</td><td class="dim">${esc(l.memo)}</td><td class="num">${l.dr ? nf(l.dr) : ''}</td><td class="num">${l.cr ? nf(l.cr) : ''}</td></tr>`).join('')}
-      <tr class="tot"><td>Total</td><td></td><td class="num">${nf(p.dr)}</td><td class="num">${nf(p.cr)}</td></tr></table>`,
+      <tr class="tot"><td>Total</td><td></td><td class="num">${nf(p.dr)}</td><td class="num">${nf(p.cr)}</td></tr></table><div data-docs="invoice:${id}" style="margin-top:16px"></div>`,
     pending ? async () => { const r = await api('POST', '/invoices/' + id + '/approve'); toast('Approved and posted to Finance as ' + r.journal_no); } : null,
     { save: 'Approve & post to Finance', kind: 'ok', extra: pending ? `<button type="button" class="btn danger" data-do="returnInv" data-id="${id}">Return to Production</button>` : '' });
 }

@@ -16,7 +16,7 @@ app.use((req, res, next) => {
     'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" });
   next();
 });
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '15mb' }));              // documents are uploaded as JSON (up to 10 MB each)
 app.use(session({
   store: new PgStore({ pool, createTableIfMissing: true }),
   secret, name: 'bp.sid', resave: false, saveUninitialized: false, rolling: true,
