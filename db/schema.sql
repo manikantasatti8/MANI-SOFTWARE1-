@@ -177,3 +177,27 @@ CREATE TABLE IF NOT EXISTS pdcs (
   created_by INTEGER REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ---------- Per-user restrictions, amortization ----------
+-- access: {"depts":[...], "producers":[ids], "clients_hidden":[ids], "max_invoice":number, "statements":[kinds]}  (empty = no restriction)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS access JSONB NOT NULL DEFAULT '{}';
+
+CREATE TABLE IF NOT EXISTS amort (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  prepaid_account_id INTEGER NOT NULL REFERENCES accounts(id),
+  expense_account_id INTEGER NOT NULL REFERENCES accounts(id),
+  total NUMERIC(16,2) NOT NULL CHECK (total > 0),
+  start_month CHAR(7) NOT NULL,                 -- YYYY-MM, first month charged
+  months INTEGER NOT NULL CHECK (months BETWEEN 1 AND 120),
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS amort_runs (
+  amort_id INTEGER NOT NULL REFERENCES amort(id),
+  month CHAR(7) NOT NULL,
+  amount NUMERIC(16,2) NOT NULL,
+  journal_id INTEGER NOT NULL REFERENCES journals(id),
+  PRIMARY KEY (amort_id, month)
+);

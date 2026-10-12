@@ -105,12 +105,12 @@ const ST = {
   producer: ['Producer – Commission', 'Producer', ['Original share', 'original'], ['PDC commission', 'pdc'], ['On outstanding premium', 'on_outstanding'], ['Settled', 'settled'], ['Due to producer', 'balance']]
 };
 views.statements = async () => {
-  const kind = S.tab.st || 'inscomm', def = ST[kind], pid = (S.stParty || {})[kind] || '';
+  const ok = stKinds(), kind = ok.includes(S.args[0]) ? S.args[0] : ok.includes('inscomm') ? 'inscomm' : ok[0], def = ST[kind], pid = +S.args[1] || '';
   const d = await api('GET', `/statements/${kind}${pid ? '?party_id=' + pid : ''}`), cols = def.slice(2), rows = d.rows.filter(r => hit(r.ref, r.policy_no, r.client_name, r.endorsement_no));
   const sum = k => rows.reduce((s, r) => s + (r[k] || 0), 0), party = d.parties.find(p => p.id == pid);
   return `<div class="head"><div><h1>Statements</h1><p>Invoice by invoice, with what is settled and what is still due</p></div><span class="sp"></span>${pid ? '<button class="btn" onclick="window.print()">Print</button>' : ''}</div>
-    <div class="card"><div class="tabs">${Object.keys(ST).map(k => `<a data-tab="st:${k}" class="${k === kind ? 'on' : ''}">${ST[k][0]}</a>`).join('')}</div>
-    <div class="row noprint" style="margin-bottom:14px"><div style="width:360px"><label>${def[1]}</label><select id="stParty"><option value="">Choose…</option>${opts(d.parties.map(p => [p.id, p.name]), pid)}</select></div></div>
+    <div class="card"><div class="tabs">${ok.map(k => `<a href="#statements/${k}" class="${k === kind ? 'on' : ''}">${ST[k][0]}</a>`).join('')}</div>
+    <div class="row noprint" style="margin-bottom:14px"><div style="width:360px"><label>${def[1]}</label><select id="stParty" data-kind="${kind}"><option value="">Choose…</option>${opts(d.parties.map(p => [p.id, p.name]), pid)}</select></div></div>
     ${!pid ? `<div class="empty">Choose a ${def[1].toLowerCase()} to see the statement. Only those with approved invoices are listed.</div>` : `<h3 style="margin-bottom:10px">${esc(party ? party.name : '')} <span class="dim" style="font-weight:400">· ${def[0]} · as at ${fdate(today())}</span></h3>
     ${rows.length ? `<div class="tw"><table><tr><th>Invoice date</th><th>Invoice no.</th>${kind === 'client' ? '<th>Insurer</th>' : '<th>Client</th>'}<th>Policy no.</th><th>Endorsement no.</th>${cols.map(c => `<th class="num">${c[0]}</th>`).join('')}</tr>
       ${rows.map(r => `<tr><td>${fdate(r.invoice_date)}</td><td>${esc(r.ref)}</td><td>${esc(kind === 'client' ? r.insurer_name : r.client_name)}</td><td>${esc(r.policy_no)}</td><td class="dim">${esc(r.endorsement_no || '')}</td>
@@ -119,7 +119,7 @@ views.statements = async () => {
       ${Math.abs(d.on_account) > 0.004 ? `<tr><td colspan="${4 + cols.length}">Received or paid without allocation (on account)</td><td class="num">${nf(d.on_account)}</td></tr>
         <tr class="tot"><td colspan="${4 + cols.length}">Net balance</td><td class="num">${nf(sum('balance') + d.on_account)}</td></tr>` : ''}</table></div>` : '<div class="empty">No approved invoices</div>'}`}</div>`;
 };
-document.addEventListener('change', e => { if (e.target.id === 'stParty') { (S.stParty = S.stParty || {})[S.tab.st || 'inscomm'] = e.target.value; render(); } });
+document.addEventListener('change', e => { if (e.target.id === 'stParty') location.hash = `#statements/${e.target.dataset.kind}${e.target.value ? '/' + e.target.value : ''}`; });
 
 /* ---------- actions ---------- */
 Object.assign(DO, {

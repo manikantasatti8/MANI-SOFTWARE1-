@@ -23,6 +23,29 @@ const CAN = {
 };
 const can = what => (req, res, next) => CAN[what].includes(req.user.role) ? next() : res.status(403).json({ error: 'Your role cannot do this' });
 
+// ---------- what each user is allowed to see ----------
+// Restrictions set per user under Admin > Users. They become part of every database query, so a
+// restricted user cannot reach hidden records by any route. Admin is never restricted.
+const DEPTS = Object.keys(require('../public/taxonomy.js'));
+const STATEMENT_KINDS = ['client', 'insurer', 'inscomm', 'producer'];
+const ints = v => (Array.isArray(v) ? v : []).map(Number).filter(n => Number.isInteger(n) && n > 0);
+const cleanAccess = a => { a = a || {}; const max = +a.max_invoice;
+  return { depts: (a.depts || []).filter(d => DEPTS.includes(d)), producers: ints(a.producers), clients_hidden: ints(a.clients_hidden),
+    max_invoice: Number.isFinite(max) && max > 0 ? Math.round(max * 100) / 100 : 0, statements: (a.statements || []).filter(k => STATEMENT_KINDS.includes(k)) }; };
+function scope(u) {
+  const a = cleanAccess(u.role === 'Admin' ? {} : u.access);
+  const mk = (dept, prod, client, total) => { const c = ['TRUE'];
+    if (a.depts.length && dept) c.push(`${dept} IN (${a.depts.map(d => `'${d}'`).join(',')})`);
+    if (a.producers.length && prod) c.push(`${prod} IN (${a.producers.join(',')})`);
+    if (a.clients_hidden.length && client) c.push(`${client} NOT IN (${a.clients_hidden.join(',')})`);
+    if (a.max_invoice && total) c.push(`abs(${total}) <= ${a.max_invoice}`);
+    return c.join(' AND '); };
+  return { access: a, restricted: !!(a.depts.length || a.producers.length || a.clients_hidden.length || a.max_invoice),
+    enq: al => mk(al + 'dept', al + 'producer_id', al + 'client_id'), inv: al => mk(al + 'dept', al + 'producer_id', al + 'client_id', al + 'total'),
+    cli: al => mk(null, al + 'producer_id', al + 'id'), deptOk: d => !a.depts.length || a.depts.includes(d),
+    statementOk: k => !a.statements.length || a.statements.includes(k) };
+}
+
 // ---------- login ----------
 // Five wrong passwords lock the account for 15 minutes.
 api.post('/login', wrap(async (req, res) => {
@@ -41,16 +64,27 @@ api.post('/login', wrap(async (req, res) => {
   await new Promise((ok, no) => req.session.regenerate(e => e ? no(e) : ok()));
   req.session.uid = u.id;
   await audit({ q }, u.id, 'Signed in', 'user', u.username);
-  res.json({ id: u.id, name: u.name, role: u.role, username: u.username });
+  res.json({ id: u.id, name: u.name, role: u.role, username: u.username, access: scope(u).access });
 }));
 api.post('/logout', (req, res) => req.session.destroy(() => res.json({ ok: true })));
 
 api.use(wrap(async (req, res, next) => {
-  const u = req.session.uid && await one('SELECT id,username,name,role FROM users WHERE id=$1 AND active', [req.session.uid]);
+  const u = req.session.uid && await one('SELECT id,username,name,role,access FROM users WHERE id=$1 AND active', [req.session.uid]);
   if (!u) throw fail('Please sign in', 401);
-  req.user = u; next();
+  req.user = u; req.scope = scope(u); next();
 }));
-api.get('/me', (req, res) => res.json(req.user));
+api.get('/me', (req, res) => res.json({ ...req.user, access: req.scope.access }));
+const books = (req, res, next) => req.scope.restricted ? res.status(403).json({ error: 'Your access is limited to part of the business, so the full books are not available to you' }) : next();
+// Any route that names one record checks first that this user may see it.
+const guard = (table, cond) => wrap(async (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return next();
+  if (!(await one(`SELECT 1 FROM ${table} x WHERE x.id=$1 AND ${cond(req.scope)}`, [req.params.id]))) throw fail('Not found', 404);
+  next();
+});
+api.use('/enquiries/:id', guard('enquiries', s => s.enq('x.')));
+api.use('/invoices/:id', guard('invoices', s => s.inv('x.')));
+api.use('/clients/:id', guard('clients', s => s.cli('x.')));
+api.use('/quotes/:id', guard('quotes', s => `x.enquiry_id IN (SELECT id FROM enquiries WHERE ${s.enq('')})`));
 api.post('/password', wrap(async (req, res) => {
   if ((req.body.password || '').length < 8) throw fail('Password must be at least 8 characters');
   await q('UPDATE users SET pass_hash=$1 WHERE id=$2', [bcrypt.hashSync(req.body.password, 10), req.user.id]);
@@ -61,7 +95,7 @@ api.post('/password', wrap(async (req, res) => {
 api.get('/meta', wrap(async (req, res) => {
   const s = {}; (await q('SELECT * FROM settings')).forEach(r => s[r.key] = r.value);
   res.json({ settings: s, insurers: await q('SELECT * FROM insurers ORDER BY name'), producers: await q('SELECT * FROM producers ORDER BY name'),
-    clients: await q('SELECT id,code,name FROM clients ORDER BY name') });
+    clients: await q(`SELECT id,code,name FROM clients WHERE ${req.scope.cli('')} ORDER BY name`) });
 }));
 
 // ---------- clients ----------
@@ -70,7 +104,7 @@ api.get('/clients', wrap(async (req, res) => res.json(await q(`
     (SELECT count(*)::int FROM enquiries e WHERE e.client_id=c.id) enquiries,
     (SELECT count(*)::int FROM invoices i WHERE i.client_id=c.id AND i.status='Approved') policies,
     (SELECT coalesce(sum(i.net),0) FROM invoices i WHERE i.client_id=c.id AND i.status='Approved') premium
-  FROM clients c LEFT JOIN producers p ON p.id=c.producer_id ORDER BY c.name`))));
+  FROM clients c LEFT JOIN producers p ON p.id=c.producer_id WHERE ${req.scope.cli('c.')} ORDER BY c.name`))));
 const clientCols = ['name', 'type', 'contact', 'email', 'phone', 'city', 'trn', 'producer_id'];
 api.post('/clients', can('produce'), wrap(async (req, res) => {
   need(req.body, 'name');
@@ -101,7 +135,7 @@ const setStage = async (t, id, stage, userId, extra) => {
   await note(t, id, userId, `Stage: ${e.stage} → ${stage}${extra ? ' — ' + extra : ''}`);
 };
 
-api.get('/enquiries', wrap(async (req, res) => res.json(await q(ENQ + ' ORDER BY e.created_at DESC'))));
+api.get('/enquiries', wrap(async (req, res) => res.json(await q(ENQ + ' WHERE ' + req.scope.enq('e.') + ' ORDER BY e.created_at DESC'))));
 api.get('/enquiries/:id', wrap(async (req, res) => {
   const e = await one(ENQ + ' WHERE e.id=$1', [req.params.id]); if (!e) throw fail('Not found', 404);
   e.notes = await q('SELECT n.*, u.name user_name FROM enquiry_notes n LEFT JOIN users u ON u.id=n.user_id WHERE enquiry_id=$1 ORDER BY at DESC', [e.id]);
@@ -111,6 +145,8 @@ api.get('/enquiries/:id', wrap(async (req, res) => {
 }));
 api.post('/enquiries', can('produce'), wrap(async (req, res) => {
   const b = req.body; need(b, 'client_id', 'dept', 'grp', 'cls', 'sub');
+  if (!req.scope.deptOk(b.dept)) throw fail('You are not allowed to work on ' + b.dept);
+  if (!(await one(`SELECT 1 FROM clients WHERE id=$1 AND ${req.scope.cli('')}`, [b.client_id]))) throw fail('Client not found', 404);
   res.json(await tx(async t => {
     const ref = await nextNo(t, 'ENQ', 4);
     const e = await t.one(`INSERT INTO enquiries(ref,client_id,dept,grp,cls,sub,type,source,priority,producer_id,sum_insured,premium_est,inception,requirements,created_by)
@@ -123,6 +159,7 @@ api.post('/enquiries', can('produce'), wrap(async (req, res) => {
 }));
 api.put('/enquiries/:id', can('produce'), wrap(async (req, res) => {
   const b = req.body; need(b, 'dept', 'grp', 'cls', 'sub');
+  if (!req.scope.deptOk(b.dept)) throw fail('You are not allowed to work on ' + b.dept);
   res.json(await one(`UPDATE enquiries SET dept=$1,grp=$2,cls=$3,sub=$4,type=$5,source=$6,priority=$7,producer_id=$8,sum_insured=$9,premium_est=$10,inception=$11,requirements=$12,updated_at=now()
     WHERE id=$13 AND stage NOT IN ('Closed') RETURNING *`,
     [b.dept, b.grp, b.cls, b.sub, b.type || 'New', b.source, b.priority || 'Medium', b.producer_id || null, r2(b.sum_insured), r2(b.premium_est), b.inception || null, b.requirements, req.params.id]));
@@ -171,8 +208,10 @@ const INV = `SELECT i.*, c.name client_name, c.code client_code, s.name insurer_
     u.name created_by_name, a.name approved_by_name, j.no journal_no
   FROM invoices i JOIN clients c ON c.id=i.client_id JOIN insurers s ON s.id=i.insurer_id LEFT JOIN producers p ON p.id=i.producer_id
   LEFT JOIN enquiries e ON e.id=i.enquiry_id LEFT JOIN users u ON u.id=i.created_by LEFT JOIN users a ON a.id=i.approved_by LEFT JOIN journals j ON j.id=i.journal_id`;
-const invFields = b => {
+const invFields = (b, s) => {
   need(b, 'client_id', 'insurer_id', 'policy_no', 'dept', 'grp', 'cls', 'sub', 'net');
+  if (s && s.access.max_invoice && Math.abs(calcInvoice(b).total) > s.access.max_invoice) throw fail(`Invoices above AED ${s.access.max_invoice.toLocaleString()} must be booked by another user`);
+  if (s && s.access.clients_hidden.includes(+b.client_id)) throw fail('Client not found', 404);
   if (b.issue_type !== 'Endorsement' && +b.net <= 0) throw fail('Net premium must be more than zero');
   if (b.start_date && b.expiry_date && b.expiry_date < b.start_date) throw fail('Expiry date is before the start date');
   const m = calcInvoice(b);
@@ -182,10 +221,11 @@ const invFields = b => {
 };
 const invCols = 'enquiry_id,client_id,insurer_id,producer_id,issue_type,policy_no,endorsement_no,dept,grp,cls,sub,invoice_date,start_date,expiry_date,sum_insured,net,fees,vat_pct,vat,total,comm_pct,comm_amt,comm_vat,prod_pct,prod_amt,prod_vat,pay_terms';
 
-api.get('/invoices', wrap(async (req, res) => res.json(await q(INV + ' ORDER BY i.id DESC'))));
+api.get('/invoices', wrap(async (req, res) => res.json(await q(INV + ' WHERE ' + req.scope.inv('i.') + ' ORDER BY i.id DESC'))));
 api.post('/invoices/calc', (req, res) => res.json(calcInvoice(req.body)));
 api.post('/invoices', can('produce'), wrap(async (req, res) => {
-  const v = invFields(req.body);
+  if (!req.scope.deptOk(req.body.dept)) throw fail('You are not allowed to work on ' + req.body.dept);
+  const v = invFields(req.body, req.scope);
   res.json(await tx(async t => {
     const ref = await nextNo(t, 'INV', 4);
     const i = await t.one(`INSERT INTO invoices(ref,${invCols},created_by) VALUES($1,${v.map((_, n) => '$' + (n + 2)).join(',')},$${v.length + 2}) RETURNING *`, [ref, ...v, req.user.id]);
@@ -193,7 +233,8 @@ api.post('/invoices', can('produce'), wrap(async (req, res) => {
   }));
 }));
 api.put('/invoices/:id', can('produce'), wrap(async (req, res) => {
-  const v = invFields(req.body);
+  if (!req.scope.deptOk(req.body.dept)) throw fail('You are not allowed to work on ' + req.body.dept);
+  const v = invFields(req.body, req.scope);
   const i = await one(`UPDATE invoices SET (${invCols})=(${v.map((_, n) => '$' + (n + 1)).join(',')}) WHERE id=$${v.length + 1} AND status IN ('Draft','Returned') RETURNING *`, [...v, req.params.id]);
   if (!i) throw fail('Only a draft or returned invoice can be changed');
   res.json(i);
@@ -241,18 +282,18 @@ api.post('/invoices/:id/approve', can('close'), wrap(async (req, res) => {
   }));
 }));
 
-api.get('/policies', wrap(async (req, res) => res.json(await q(INV + ` WHERE i.status='Approved' AND i.issue_type<>'Endorsement' ORDER BY i.expiry_date NULLS LAST`))));
+api.get('/policies', wrap(async (req, res) => res.json(await q(INV + ` WHERE i.status='Approved' AND i.issue_type<>'Endorsement' AND ${req.scope.inv('i.')} ORDER BY i.expiry_date NULLS LAST`))));
 
 // ---------- finance: read the books, reverse a posted voucher ----------
-api.get('/journals', can('finance'), wrap(async (req, res) => res.json(await q(`
+api.get('/journals', can('finance'), books, wrap(async (req, res) => res.json(await q(`
   SELECT j.*, u.name created_by_name, (SELECT sum(dr) FROM journal_lines l WHERE l.journal_id=j.id) amount
   FROM journals j LEFT JOIN users u ON u.id=j.created_by ORDER BY j.id DESC`))));
-api.get('/journals/:id', can('finance'), wrap(async (req, res) => {
+api.get('/journals/:id', can('finance'), books, wrap(async (req, res) => {
   const j = await one('SELECT * FROM journals WHERE id=$1', [req.params.id]); if (!j) throw fail('Not found', 404);
   j.lines = await q('SELECT l.*, a.code, a.name, i.ref invoice_ref FROM journal_lines l JOIN accounts a ON a.id=l.account_id LEFT JOIN invoices i ON i.id=l.invoice_id WHERE journal_id=$1 ORDER BY l.id', [j.id]);
   res.json(j);
 }));
-api.post('/journals/:id/reverse', can('reverse'), wrap(async (req, res) => {
+api.post('/journals/:id/reverse', can('reverse'), books, wrap(async (req, res) => {
   need(req.body, 'reason');
   res.json(await tx(async t => {
     const j = await t.one('SELECT * FROM journals WHERE id=$1 FOR UPDATE', [req.params.id]);
@@ -273,12 +314,16 @@ api.post('/journals/:id/reverse', can('reverse'), wrap(async (req, res) => {
     return { ok: true, journal_no: no };
   }));
 }));
-api.get('/trial-balance', can('finance'), wrap(async (req, res) => res.json(await q(`
+api.get('/trial-balance', can('finance'), books, wrap(async (req, res) => res.json(await q(`
   SELECT a.code, a.name, a.type, sum(l.dr) dr, sum(l.cr) cr, sum(l.dr)-sum(l.cr) bal
   FROM journal_lines l JOIN accounts a ON a.id=l.account_id GROUP BY a.id HAVING sum(l.dr)<>0 OR sum(l.cr)<>0 ORDER BY a.code`))));
 
 // ---------- dashboard ----------
 api.get('/dashboard', wrap(async (req, res) => {
+  // Same queries for everyone, but each table is first cut down to what this user may see.
+  const cut = sql => sql.replace(/FROM enquiries\b/g, `FROM (SELECT * FROM enquiries WHERE ${req.scope.enq('')}) enquiries`)
+    .replace(/FROM invoices( i)?\b/g, (m, al) => `FROM (SELECT * FROM invoices WHERE ${req.scope.inv('')}) ${al ? 'i' : 'invoices'}`);
+  const q = (sql, p) => module.exports.q_(cut(sql), p), one = (sql, p) => q(sql, p).then(r => r[0]);
   const [stages, k, producers, queue, renew, activity] = await Promise.all([
     q(`SELECT stage, count(*)::int n, coalesce(sum(premium_est),0) premium FROM enquiries GROUP BY stage`),
     one(`SELECT
@@ -297,22 +342,22 @@ api.get('/dashboard', wrap(async (req, res) => {
        WHERE i.status='Approved' AND i.issue_type<>'Endorsement' AND i.expiry_date<=CURRENT_DATE+60 ORDER BY i.expiry_date`),
     q(`SELECT a.*, u.name user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE a.action<>'Signed in' ORDER BY a.id DESC LIMIT 8`)
   ]);
-  res.json({ stages, k, producers, queue, renew, activity });
+  res.json({ stages, k, producers, queue, renew, activity: req.scope.restricted ? [] : activity });
 }));
 
 // ---------- admin ----------
-api.get('/audit', can('finance'), wrap(async (req, res) => res.json(await q('SELECT a.*, u.name user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT 500'))));
-api.get('/users', can('admin'), wrap(async (req, res) => res.json(await q('SELECT id,username,name,role,active,created_at FROM users ORDER BY id'))));
+api.get('/audit', can('finance'), books, wrap(async (req, res) => res.json(await q('SELECT a.*, u.name user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT 500'))));
+api.get('/users', can('admin'), wrap(async (req, res) => res.json(await q('SELECT id,username,name,role,active,access,created_at FROM users ORDER BY id'))));
 api.post('/users', can('admin'), wrap(async (req, res) => {
   const b = req.body; need(b, 'username', 'name', 'role', 'password');
   if (b.password.length < 8) throw fail('Password must be at least 8 characters');
-  const u = await one('INSERT INTO users(username,name,role,pass_hash) VALUES($1,$2,$3,$4) RETURNING id,username,name,role', [b.username.trim(), b.name.trim(), b.role, bcrypt.hashSync(b.password, 10)]);
+  const u = await one('INSERT INTO users(username,name,role,pass_hash,access) VALUES($1,$2,$3,$4,$5) RETURNING id,username,name,role', [b.username.trim(), b.name.trim(), b.role, bcrypt.hashSync(b.password, 10), JSON.stringify(cleanAccess(b.access))]);
   await audit({ q }, req.user.id, 'User added', 'user', u.username, u.role); res.json(u);
 }));
 api.put('/users/:id', can('admin'), wrap(async (req, res) => {
   const b = req.body; need(b, 'name', 'role');
   if (+req.params.id === req.user.id && (b.role !== 'Admin' || b.active === false)) throw fail('You cannot remove your own admin access');
-  await q('UPDATE users SET name=$1, role=$2, active=$3 WHERE id=$4', [b.name, b.role, b.active !== false, req.params.id]);
+  await q('UPDATE users SET name=$1, role=$2, active=$3, access=$5 WHERE id=$4', [b.name, b.role, b.active !== false, req.params.id, JSON.stringify(cleanAccess(b.access))]);
   if (b.password) { if (b.password.length < 8) throw fail('Password must be at least 8 characters'); await q('UPDATE users SET pass_hash=$1 WHERE id=$2', [bcrypt.hashSync(b.password, 10), req.params.id]); }
   await audit({ q }, req.user.id, 'User updated', 'user', b.name, b.role); res.json({ ok: true });
 }));
@@ -322,3 +367,4 @@ api.post('/producers', can('admin'), wrap(async (req, res) => { need(req.body, '
 require('./finance')(api, { wrap, fail, need, can });
 
 module.exports = api;
+module.exports.q_ = q;

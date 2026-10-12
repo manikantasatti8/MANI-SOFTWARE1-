@@ -60,13 +60,20 @@ const LOST = ['Price too high', 'Went to another broker', 'Chose to stay with cu
 
 /* ---------- navigation by role ---------- */
 const is = (...roles) => roles.includes(S.user.role);
+// Per-user limits set by the administrator. The server enforces them; the screens only hide what would be refused.
+const ACC = () => (S.user.role === 'Admin' ? null : S.user.access) || {};
+const restricted = () => { const a = ACC(); return !!((a.depts || []).length || (a.producers || []).length || (a.clients_hidden || []).length || a.max_invoice); };
+const ST_KINDS = ['client', 'insurer', 'inscomm', 'producer'];
+const stKinds = () => { const a = ACC().statements || []; return a.length ? ST_KINDS.filter(k => a.includes(k)) : ST_KINDS; };
 const canProduce = () => is('Admin', 'Production'), canClose = () => is('Admin', 'Closing'), canFinance = () => is('Admin', 'Finance', 'Manager', 'Closing');
 function navItems() {
   const n = [['', [['dashboard', 'Dashboard', 'grid']]],
     ['Production', [['pipeline', 'Pipeline', 'kanban'], ['enquiries', 'Enquiries', 'inbox'], ['clients', 'Clients', 'users'], ['invoices', 'Book Invoice', 'doc'], ['policies', 'Policies', 'shield']]],
     ['Closing', [['closing', 'Closing Approvals', 'check']]]];
-  if (canFinance()) n.push(['Finance', [['coa', 'Chart of Accounts', 'grid'], ['vouchers', 'Vouchers', 'book'], ['pdc', 'PDC Cheques', 'doc'], ['statements', 'Statements', 'users'], ['tb', 'Trial Balance', 'scale']]]);
-  const adm = []; if (is('Admin')) adm.push(['admin', 'Users & Lists', 'gear']); if (canFinance()) adm.push(['audit', 'Activity Log', 'clock']);
+  if (canFinance()) { const full = !restricted(), anySt = stKinds().length;
+    n.push(['Finance', [['fin', 'Finance Dashboard', 'grid'], full && ['coa', 'Chart of Accounts', 'book'], full && ['vouchers', 'Vouchers', 'book'], ['pdc', 'PDC Cheques', 'doc'], ['pdc-premium', 'PDC Premium', 'coin'],
+      anySt && ['statements', 'Statements', 'users'], anySt && ['aging', 'Aging Reports', 'clock'], full && ['vat', 'VAT Report', 'scale'], full && ['amort', 'Amortization', 'clock'], full && ['tb', 'Trial Balance', 'scale']].filter(Boolean)]); }
+  const adm = []; if (is('Admin')) adm.push(['admin', 'Users & Lists', 'gear']); if (canFinance() && !restricted()) adm.push(['audit', 'Activity Log', 'clock']);
   if (adm.length) n.push(['Admin', adm]);
   return n;
 }
@@ -79,15 +86,21 @@ async function render() {
   $('#app').innerHTML = `<div class="shell">
     <aside class="side"><div class="brand"><div class="logo">BP</div><div><b>${esc(S.meta.settings.company || 'Broker Portal')}</b><small>Smart Operations</small></div></div>
       <nav class="nav">${navItems().map(([g, items]) => (g ? `<div class="ngroup">${g}</div>` : '') + items.map(([id, l, i]) =>
-        `<a data-nav="${id}" class="${S.view === id ? 'on' : ''}">${ic(i)}${l}${counts[id] ? `<span class="cnt ${id === 'closing' ? 'hot' : ''}">${counts[id]}</span>` : ''}</a>`).join('')).join('')}</nav></aside>
+        `<a href="#${id}" data-nav="${id}" class="${S.view === id ? 'on' : ''}">${ic(i)}${l}${counts[id] ? `<span class="cnt ${id === 'closing' ? 'hot' : ''}">${counts[id]}</span>` : ''}</a>`).join('')).join('')}</nav></aside>
     <div class="main"><div class="top">
       <div class="search">${ic('search')}<input id="q" placeholder="Search clients, policies, enquiries or reference number…" value="${esc(S.search)}"></div><span class="sp"></span>
+      <a class="btn sm" href="${esc(location.href)}" target="_blank" rel="noopener" title="Open this page in a new browser tab">${ic('plus')}New tab</a>
       <div class="me" data-do="account"><div class="av">${initials(S.user.name)}</div><div><b>${esc(S.user.name)}</b><small>${esc(S.user.role)}</small></div></div>
       <button class="btn sm" data-do="logout">Sign out</button></div>
       <div class="page" id="page"><div class="empty">Loading…</div></div></div></div>`;
   try { $('#page').innerHTML = await views[S.view](); } catch (e) { $('#page').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
-const go = (view, sel) => { S.view = view; S.sel = sel ?? null; S.search = ''; location.hash = view; render(); };
+// Every screen has its own address (#view/part/part), so it can be bookmarked or opened in another tab.
+const go = (view, sel) => { const h = '#' + view + (sel ? '/' + sel : ''); S.search = '';
+  if (location.hash === h) { readHash(); render(); } else location.hash = h; };
+function readHash() { const [v, ...args] = location.hash.slice(1).split('/').map(decodeURIComponent);
+  S.view = views[v] ? v : 'dashboard'; S.args = args; S.sel = S.view === 'enquiries' && +args[0] ? +args[0] : S.view === 'enquiries' ? null : S.sel; }
+window.addEventListener('hashchange', () => { if (!S.user) return; S.search = ''; closeModal(); readHash(); render(); });
 const hit = (...vals) => !S.search || vals.join(' ').toLowerCase().includes(S.search.toLowerCase());
 
 function renderLogin(err) {
@@ -97,7 +110,7 @@ function renderLogin(err) {
     <div class="err">${esc(err || '')}</div><button class="btn pri" style="justify-content:center;padding:11px">Sign in</button></form></div></div>`;
   $('#login').onsubmit = async e => {
     e.preventDefault(); const f = new FormData(e.target);
-    try { S.user = await api('POST', '/login', { username: f.get('username'), password: f.get('password') }); S.meta = null; S.view = 'dashboard'; render(); }
+    try { S.user = await api('POST', '/login', { username: f.get('username'), password: f.get('password') }); S.meta = null; readHash(); render(); }
     catch (x) { renderLogin(x.message); }
   };
 }
@@ -264,8 +277,8 @@ views.audit = async () => {
 views.admin = async () => {
   const users = await api('GET', '/users');
   return `<div class="head"><div><h1>Users & Lists</h1><p>Each person signs in with their own name and only sees what their role allows</p></div><span class="sp"></span><button class="btn pri" data-do="newUser">${ic('plus')}New user</button></div>
-    <div class="card" style="margin-bottom:16px"><h3>Users</h3><table><tr><th>Username</th><th>Name</th><th>Role</th><th>Status</th><th></th></tr>${users.map(u => `<tr><td><b>${esc(u.username)}</b></td><td>${esc(u.name)}</td><td>${badge(u.role, 'info')}</td>
-      <td>${u.active ? badge('Active', 'ok') : badge('Disabled', 'bad')}</td><td class="num"><button class="btn sm" data-do="editUser" data-id="${u.id}">Edit</button></td></tr>`).join('')}</table></div>
+    <div class="card" style="margin-bottom:16px"><h3>Users</h3><table><tr><th>Username</th><th>Name</th><th>Role</th><th>Status</th><th>Access</th><th></th></tr>${users.map(u => `<tr><td><b>${esc(u.username)}</b></td><td>${esc(u.name)}</td><td>${badge(u.role, 'info')}</td>
+      <td>${u.active ? badge('Active', 'ok') : badge('Disabled', 'bad')}</td><td class="dim">${u.role === 'Admin' ? 'Admin – sees everything' : esc(accessSummary(u.access))}</td><td class="num"><button class="btn sm" data-do="editUser" data-id="${u.id}">Edit</button></td></tr>`).join('')}</table></div>
     <div class="grid g2"><div class="card"><h3>Insurers <span class="sp"></span><button class="btn sm" data-do="newInsurer">${ic('plus')}Add</button></h3>${S.meta.insurers.map(i => `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)">${esc(i.name)}</div>`).join('')}</div>
       <div class="card"><h3>Producers <span class="sp"></span><button class="btn sm" data-do="newProducer">${ic('plus')}Add</button></h3>${S.meta.producers.map(p => `<div class="row" style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)">${esc(p.name)}<span class="sp"></span><span class="dim">${p.comm_pct}% of commission</span></div>`).join('')}</div></div>`;
 };
@@ -345,10 +358,28 @@ async function previewInvoice(id) {
 }
 const ask = (title, label, onSave, list) => modal(title, list ? `<label>${label}</label><select name="reason">${opts(list)}</select>` : `<label>${label}</label><textarea name="reason" required></textarea>`, onSave, { narrow: true, save: 'Confirm' });
 function userForm(u = {}) {
+  const a = u.access || {}, has = (k, v) => (a[k] || []).map(String).includes(String(v));
+  const checks = (name, list) => `<div class="checks">${list.map(([v, l]) => `<label><input type="checkbox" data-acc="${name}" value="${esc(v)}" ${has(name, v) ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div>`;
   modal(u.id ? 'Edit user' : 'New user', `<div class="form">${u.id ? '' : fld('Username', 'username', '', 'required')}${fld('Full name', 'name', u.name, 'required')}${sel('Role', 'role', ['Production', 'Closing', 'Finance', 'Manager', 'Admin'], u.role)}
-    ${fld(u.id ? 'New password (leave empty to keep)' : 'Password (8 or more characters)', 'password', '', `type="password" autocomplete="new-password" ${u.id ? '' : 'required'}`)}${u.id ? sel('Status', 'active', [['true', 'Active'], ['false', 'Disabled']], String(u.active)) : ''}</div>`,
-    d => u.id ? api('PUT', '/users/' + u.id, Object.assign(d, { active: d.active !== 'false' })) : api('POST', '/users', d), { narrow: true });
+    ${fld(u.id ? 'New password (leave empty to keep)' : 'Password (8 or more characters)', 'password', '', `type="password" autocomplete="new-password" ${u.id ? '' : 'required'}`)}${u.id ? sel('Status', 'active', [['true', 'Active'], ['false', 'Disabled']], String(u.active)) : ''}</div>
+    <div class="sec">What this user may see <span class="mute" style="text-transform:none;letter-spacing:0">— leave everything empty for no limits. Admin users are never limited.</span></div>
+    <div class="form"><div><label>Departments (only these)</label>${checks('depts', Object.keys(TAX).map(d => [d, d]))}</div>
+      <div><label>Statements and aging reports (only these)</label>${checks('statements', [['client', 'Client – premium'], ['insurer', 'Insurance company – premium'], ['inscomm', 'Insurance company – commission'], ['producer', 'Producer – commission']])}</div>
+      ${fld('Hide invoices above (AED)', 'max_invoice', a.max_invoice || '', 'type="number" min="0" step="1" placeholder="No limit"')}<div></div>
+      <div><label>Producers (only these producers' business)</label>${checks('producers', S.meta.producers.map(p => [p.id, p.name]))}</div>
+      <div><label>Clients hidden from this user</label><select multiple size="7" data-acc-multi="clients_hidden">${S.meta.clients.map(c => `<option value="${c.id}" ${has('clients_hidden', c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+        <small class="mute">Hold Ctrl to pick several</small></div></div>
+    <p class="dim" style="margin:12px 0 0">A user with any of these limits sees only matching clients, enquiries, invoices, PDCs, statements and aging. The full books (vouchers, ledgers, trial balance, VAT) are closed to them.</p>`,
+    (d, f) => { const access = { depts: [], statements: [], producers: [], max_invoice: +d.max_invoice || 0,
+        clients_hidden: [...f.querySelectorAll('[data-acc-multi] option:checked')].map(o => +o.value) };
+      f.querySelectorAll('[data-acc]:checked').forEach(c => access[c.dataset.acc].push(c.dataset.acc === 'producers' ? +c.value : c.value));
+      const body = Object.assign(d, { access }); delete body.max_invoice;
+      return u.id ? api('PUT', '/users/' + u.id, Object.assign(body, { active: d.active !== 'false' })) : api('POST', '/users', body); });
 }
+const accessSummary = a => { a = a || {}; const p = [];
+  if ((a.depts || []).length) p.push(a.depts.join(', ')); if ((a.producers || []).length) p.push(a.producers.length + ' producer(s)');
+  if ((a.clients_hidden || []).length) p.push(a.clients_hidden.length + ' client(s) hidden'); if (a.max_invoice) p.push('up to ' + n0(a.max_invoice));
+  if ((a.statements || []).length) p.push('statements: ' + a.statements.length); return p.length ? p.join(' · ') : 'No limits'; };
 
 /* ---------- actions ---------- */
 const DO = {
@@ -381,8 +412,9 @@ const DO = {
 document.addEventListener('click', act(async e => {
   const d = e.target.closest('[data-do]'); if (d && d.dataset.do) return DO[d.dataset.do](d.dataset.id, d);
   const t = e.target.closest('[data-tab]'); if (t) { const [k, v] = t.dataset.tab.split(':'); S.tab[k] = v; S.sel = null; return render(); }
-  const n = e.target.closest('[data-nav]'); if (n) return go(n.dataset.nav, n.dataset.sel ? +n.dataset.sel : null);
-  const s = e.target.closest('[data-sel]'); if (s) { S.sel = +s.dataset.sel; return render(); }
+  const n = e.target.closest('[data-nav]');
+  if (n) { if (n.tagName === 'A' && (e.ctrlKey || e.metaKey || e.shiftKey)) return; e.preventDefault(); return go(n.dataset.nav, n.dataset.sel ? +n.dataset.sel : null); }
+  const s = e.target.closest('[data-sel]'); if (s) { if (S.view === 'enquiries') return go('enquiries', +s.dataset.sel); S.sel = +s.dataset.sel; return render(); }
 }));
 document.addEventListener('submit', act(async e => {
   if (e.target.id !== 'noteForm') return; e.preventDefault();
@@ -394,4 +426,4 @@ document.addEventListener('keydown', e => {
 });
 
 (async () => { try { S.user = await (await fetch('/api/me')).json().then(u => u.id ? u : null); } catch (e) { S.user = null; }
-  const h = location.hash.slice(1); if (S.user && views[h]) S.view = h; render(); })();
+  readHash(); render(); })();
