@@ -67,17 +67,51 @@ When other people start using it over the office network, it must run behind HTT
 
 ## Finance
 
+- **Finance Dashboard**: cash, bank, premium outstanding, premium payable, commission due, producer payable,
+  PDC premium and VAT. Click any card to open its detailed page.
 - **Chart of Accounts**: assets, liabilities, equity, income, expenses. Add your own accounts and bank or cash accounts.
 - **Vouchers**: bank receipt, bank payment, cash receipt, cash payment, general voucher. Each line can be allocated to an invoice or left without allocation (on account).
 - **Direct payment voucher**: when the client pays the insurer directly. The client balance and the insurer premium payable both go down.
-- **PDC cheques**: each cheque is linked to its invoice. Marking it cleared posts the voucher.
-- **Statements** (client premium, insurer premium, insurer commission, producer commission), invoice by invoice.
+- **PDC cheques** and the **PDC Premium** page: each cheque is linked to its invoice. Marking it cleared posts the voucher.
+- **Statements** and **Aging reports** for client premium, insurer premium, insurer commission and producer commission,
+  invoice by invoice, in age buckets (0–30, 31–60, 61–90, 91–180, 181–365, over 365 days).
+- **VAT report**, **Amortization** of prepaid expenses, **Profit & Loss**, **Balance Sheet**, **Trial Balance**.
+- Every report has **Export to Excel** and **Print**.
 
 Commission sits in one account per insurer. The statement splits it:
 `original = PDC part + part on outstanding premium + due part`, and `due commission = due part − settled`.
 Commission becomes due in step with the premium the client has paid, to us or directly to the insurer.
 
+## Who sees what
+
+Under **Users & Lists**, each user can be limited to:
+departments (Medical / Motor / General), certain producers' business, invoices up to an amount,
+certain statements and aging reports, and can have specific clients hidden.
+These limits are applied by the server to every screen and every report. A limited user cannot open
+the full books (vouchers, ledgers, trial balance, VAT, profit & loss). Admin users are never limited.
+
+## Every screen has its own address
+
+For example `http://localhost:3000/#aging/inscomm` or `#pdc-premium`. You can bookmark a screen,
+use the browser's back button, or press **New tab** (top right) to work on several screens at once.
+
+## Updating to a new version
+
+Stop the portal (`Ctrl + C`), take a backup, then:
+```
+git pull
+npm install
+npm run setup
+npm start
+```
+`npm run setup` only adds what is new. It never deletes data.
+
+Backup (asks for your PostgreSQL password; keep the file outside the project folder):
+```
+"C:\Program Files\PostgreSQL\18\bin\pg_dump" -U postgres -h localhost -F c -f backup.dump broker_portal
+```
+
 ## Not built yet
 
-Profit and loss, balance sheet, VAT report, provisions, year-end transfer to Head Office, endorsements
-as their own screen, renewals workflow, document upload, and email.
+Matching an on-account receipt to invoices afterwards, gratuity and leave provisions, year-end transfer
+to Head Office, bank reconciliation, endorsements as their own screen, renewals workflow, document upload, and email.

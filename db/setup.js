@@ -49,6 +49,9 @@ const conn = database => ({ host: process.env.PGHOST, port: process.env.PGPORT, 
   for (const [code, name, type, parent, grp, control] of COA)
     await db.query(`INSERT INTO accounts(code,name,type,parent_code,is_group,control) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (code) DO NOTHING`,
       [code, name, type, parent, !!grp, control || null]);
+  // Money accounts: receipts and payments can only use accounts marked bank or cash.
+  await db.query(`UPDATE accounts SET cash_kind='cash' WHERE code IN ('110101','110102') AND cash_kind IS NULL`);
+  await db.query(`UPDATE accounts SET cash_kind='bank' WHERE code='110111' AND cash_kind IS NULL`);
 
   // The first administrator. You choose the password; only its scrambled form is stored.
   if (!(await db.query('SELECT 1 FROM users LIMIT 1')).rowCount) {

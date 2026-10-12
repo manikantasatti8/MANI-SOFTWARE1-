@@ -297,6 +297,16 @@ module.exports = (api, { wrap, fail, need, can }) => {
     res.json({ from, to, output, input, output_total: t(output), input_total: t(input), net: r2(t(output) - t(input)) });
   }));
 
+  // ---------- profit & loss and balance sheet ----------
+  // For every account: movement in the period (from..to) and closing balance at 'to' (debit minus credit).
+  api.get('/financials', can('finance'), fullBooks, safe(async (req, res) => {
+    const from = req.query.from || '1900-01-01', to = req.query.to || '2999-12-31';
+    res.json(await q(`SELECT a.id, a.code, a.name, a.type, a.parent_code, a.is_group, a.control,
+        coalesce(sum(l.dr-l.cr) FILTER (WHERE j.jdate BETWEEN $1 AND $2),0) period, coalesce(sum(l.dr-l.cr) FILTER (WHERE j.jdate<=$2),0) closing
+      FROM accounts a LEFT JOIN journal_lines l ON l.account_id=a.id LEFT JOIN journals j ON j.id=l.journal_id
+      GROUP BY a.id ORDER BY a.code`, [from, to]));
+  }));
+
   // ---------- amortization of prepaid expenses ----------
   // A schedule spreads a prepaid amount over a number of months. Running a month posts one voucher per schedule:
   // debit the expense, credit the prepaid account. A month is never posted twice.

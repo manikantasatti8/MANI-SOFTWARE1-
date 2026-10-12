@@ -72,7 +72,7 @@ function navItems() {
     ['Closing', [['closing', 'Closing Approvals', 'check']]]];
   if (canFinance()) { const full = !restricted(), anySt = stKinds().length;
     n.push(['Finance', [['fin', 'Finance Dashboard', 'grid'], full && ['coa', 'Chart of Accounts', 'book'], full && ['vouchers', 'Vouchers', 'book'], ['pdc', 'PDC Cheques', 'doc'], ['pdc-premium', 'PDC Premium', 'coin'],
-      anySt && ['statements', 'Statements', 'users'], anySt && ['aging', 'Aging Reports', 'clock'], full && ['vat', 'VAT Report', 'scale'], full && ['amort', 'Amortization', 'clock'], full && ['tb', 'Trial Balance', 'scale']].filter(Boolean)]); }
+      anySt && ['statements', 'Statements', 'users'], anySt && ['aging', 'Aging Reports', 'clock'], full && ['financials', 'Profit & Loss / Balance Sheet', 'scale'], full && ['vat', 'VAT Report', 'scale'], full && ['amort', 'Amortization', 'clock'], full && ['tb', 'Trial Balance', 'scale']].filter(Boolean)]); }
   const adm = []; if (is('Admin')) adm.push(['admin', 'Users & Lists', 'gear']); if (canFinance() && !restricted()) adm.push(['audit', 'Activity Log', 'clock']);
   if (adm.length) n.push(['Admin', adm]);
   return n;
